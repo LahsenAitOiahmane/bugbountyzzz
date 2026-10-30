@@ -1,0 +1,42 @@
+# ─── Never commit these ────────────────────────────────────────────────────────
+# Program confidentiality: most programs forbid disclosing findings without
+# written consent. Pushing evidence to a public repo is a rules violation and
+# can void your safe harbour protection.
+
+# Evidence and recon output — contains real data, PII and screenshots
+evidence/
+recon/
+**/evidence/
+**/recon/
+
+# Live working documents — findings, hypotheses, session logs
+programs/*/notes.md
+programs/*/findings.md
+programs/*/hypotheses.md
+
+# Proxy captures and session material
+*.pcap
+*.pcapng
+*.har
+*.burp
+*.session
+cookies.txt
+*_cookie*
+
+# Credentials and environment
+.env
+.env.*
+*.pem
+*.key
+secrets.*
+
+# ─── Keep templates tracked ────────────────────────────────────────────────────
+# templates/ is committed on purpose — it is the blank scaffolding.
+!templates/*.md
+
+# ─── OS and editor noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
