@@ -16,10 +16,19 @@ export function exactOrigin(value) {
   return url.origin;
 }
 
+// A hostname-only seed is a convenience, never a wildcard scope expansion.
+export function normalizeSeed(value) {
+  const input = typeof value === 'string' ? value.trim() : '';
+  const candidate = /^[a-z\d.-]+(?::\d{1,5})?(?:[/?#]|$)/i.test(input) && !/^https?:/i.test(input)
+    ? `https://${input}` : input;
+  const url = normalizeUrl(candidate);
+  if (!url) throw new Error('Seed must be an HTTP(S) URL or hostname without credentials');
+  return url;
+}
+
 export class Scope {
   constructor(seed, { origins = [], assetOrigins = [], excludes = [] } = {}) {
-    const url = normalizeUrl(seed);
-    if (!url) throw new Error('Seed must be an absolute HTTP(S) URL without credentials');
+    const url = normalizeSeed(seed);
     this.seed = url;
     this.primary = new URL(url).origin;
     this.origins = new Set([this.primary, ...origins.map(exactOrigin)]);

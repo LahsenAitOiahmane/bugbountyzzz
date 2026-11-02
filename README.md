@@ -1,124 +1,100 @@
-# bugbountyzzz
+# js-collect
 
-A personal bug bounty workspace: a reusable hunting methodology, the tooling to run it,
-and a per-program scaffold.
+Collect and map the client-side JavaScript exposed by an authorized web application.
+Give it a hostname or URL; it saves original bundles, inline scripts, discoverable
+chunks and published source maps, with page and dependency relationships. An offline
+analysis command formats the saved code and indexes imports, exports, API references
+and security review cues.
 
-Built around **Intigriti**, currently targeting **Personio** (Public · Open · Active ·
-€175 minimum bounty). The workflow itself is program-agnostic.
+Works with Node.js 22+ on Windows, Linux and macOS. Playwright renders the application;
+Acorn and parse5 parse its code and HTML. No target is hardcoded.
 
----
+## Prepare the workspace
 
-## Start here
+Install Node.js 22+ and Git, then run these commands from a terminal:
 
-| Document | What it is |
-|---|---|
-| **[HUNTER-WORKFLOW.md](HUNTER-WORKFLOW.md)** | The methodology. Six phases with gates. Program-agnostic — read this first. |
-| [REPOS.md](REPOS.md) | Curated repos and tools, plus the warning about AI tooling. |
-| [PERSONIO-SETUP.md](PERSONIO-SETUP.md) | Environment: two trial tenants, proxy, throttle, accounts. |
-| [PERSONIO-TEST-PLAN.md](PERSONIO-TEST-PLAN.md) | What to test on Personio, in priority order. |
-| [programs/personio/scope.md](programs/personio/scope.md) | Pre-filled scope, payout table, out-of-scope list. |
-| [scripts/js-collector/README.md](scripts/js-collector/README.md) | Browser/static JS collector: chunks, manifests, source maps, provenance and scope controls. |
-
----
-
-## Layout
-
-```
-.
-├── HUNTER-WORKFLOW.md         the methodology (phases 0-6 + appendices A-E)
-├── REPOS.md                   curated repos, by purpose
-├── PERSONIO-SETUP.md          environment setup for Personio
-├── PERSONIO-TEST-PLAN.md      Personio test batteries
-├── templates/                 blank scaffolding, copied per program
-│   ├── scope.md               intake + compliance record
-│   ├── notes.md               session log
-│   ├── hypotheses.md          claim / endpoint / test / result
-│   ├── findings.md            confirmed findings
-│   └── report-template.md     report skeleton
-├── scripts/
-│   ├── new-program.sh         scaffold a new program workspace
-│   ├── install-tools.sh       install the Go recon toolchain
-│   └── idor_sweep.py          rate-limited IDOR replay harness
-├── programs/
-│   └── personio/
-│       └── scope.md           pre-filled; working notes are gitignored
-└── research/                  background research that informed the workflow
-    ├── Intigriti-beginner-playbook.md
-    ├── Intigriti-program-shortlist.md
-    ├── BIZONE-web-targets.md
-    └── SOGAZ-recon-playbook.md
-```
-
----
-
-## Quick start
-
-Collect a site's JavaScript (Node.js 22+, Windows/Linux/macOS):
-
-```bash
+```sh
+git clone https://github.com/LahsenAitOiahmane/bugbountyzzz.git
+cd bugbountyzzz
 npm --prefix scripts/js-collector ci
 npm --prefix scripts/js-collector run browser:install
-node scripts/js-collector/cli.mjs https://app.example.com --out programs/example/recon/js/run-01
 ```
 
-See the [collector guide](scripts/js-collector/README.md) for exact scope origins,
-CDNs, authentication, manual browsing, HTTP-only mode and Katana seed imports.
+On Linux, if Chromium needs operating-system libraries:
 
-```bash
-# install the recon toolchain (WSL / Kali / Debian)
-bash scripts/install-tools.sh
-
-# scaffold a new program
-bash scripts/new-program.sh <program-name> <program-url>
-
-# run an IDOR sweep against a chosen endpoint
-python3 scripts/idor_sweep.py \
-  --url 'https://target/api/v1/items/{id}' \
-  --ids 1001,1002,1003 \
-  --baseline 1003 \
-  --cookie 'SESSION=...' \
-  --header 'X-Intigriti-Username: <handle>' \
-  --delay 0.5 \
-  --out ./evidence/sweep
+```sh
+cd scripts/js-collector
+npx playwright install --with-deps chromium
+cd ../..
 ```
 
----
+The browser download is optional for HTTP-only collection. All examples below run
+from the repository root and use a new output directory for each run.
 
-## The rules this repo is built on
+## Start recon and extraction
 
-**1. Compliance before requests.** Read the scope, set the throttle below the program's
-limit, add the attribution header, use accounts you registered yourself. Every session.
+```sh
+node scripts/js-collector/cli.mjs example.com --out recon/example/public-01
+```
 
-**2. Scanner output is worth zero.** Every platform's unpaid list is essentially a list of
-things a scanner can find. Tools expand coverage; judgement finds bugs.
+A hostname uses HTTPS. The exact starting origin is allowed; subdomains, other ports
+and external CDNs are added explicitly. For an application that publishes its scripts
+on a separate asset origin:
 
-**3. Authorization is about data ownership, not endpoint path.** The identifier is the
-attack surface. Any request carrying an ID, email, slug or filename is a candidate.
+```sh
+node scripts/js-collector/cli.mjs https://app.example.com --asset-origin https://cdn.example.com --strict-assets --delay 1000 --out recon/example/public-02
+```
 
-**4. AI output is a lead, never a finding.** AI-generated low-quality reports caused cURL
-to end its programme, HackerOne to close Internet Bug Bounty submissions, and Liferay to
-suspend its programme in 2026. Never submit anything you have not personally reproduced.
+Asset origins permit published dependency retrieval; they do not permit page crawling
+or API calls on the CDN. Set the origins, exclusions, attribution headers, rate and
+budgets to match the authorization for your target. Open the run's `inventory.html`
+to inspect pages, forms, scripts and observed network relationships.
 
-See [HUNTER-WORKFLOW.md](HUNTER-WORKFLOW.md) Appendix E for where AI actually fits.
+No URL-only run guarantees every script. Login, roles, feature flags and unvisited
+interactions can expose additional code. The default authentication policy pauses at
+login or consent and writes `AUTH-REQUIRED.md`. Complete normal login yourself and
+resume with a local saved session; never post passwords or cookies in an issue.
 
----
+## Map and review the saved JavaScript
 
-## A note on what is *not* in this repo
+```sh
+node scripts/js-collector/analyze.mjs recon/example/public-02 --out recon/example/analysis-01
+```
 
-Working documents — `notes.md`, `hypotheses.md`, `findings.md`, `evidence/`, `recon/` —
-are **gitignored on purpose**. Most programmes forbid disclosing findings without written
-consent, and publishing evidence to a public repository would breach the rules and could
-void safe harbour protection.
+Open `recon/example/analysis-01/map.html`. The analysis makes no target requests and
+does not execute downloaded bundles. It preserves original evidence and writes
+formatted views, module relationships, endpoint references and review cues. A cue is
+a lead for manual validation, not a confirmed vulnerability or a ready-to-submit report.
 
-The email aliases in the Personio documents appear as `<handle>` placeholders for the same
-reason: publishing live forwarding addresses invites spam.
+## Commands and full reference
 
----
+```sh
+node scripts/js-collector/cli.mjs --help
+node scripts/js-collector/analyze.mjs --help
+npm --prefix scripts/js-collector test
+node scripts/check-public-files.mjs
+node scripts/export-tool.mjs --out recon/releases/js-collect
+```
 
-## Status
+See the **[complete command and parameter reference](scripts/js-collector/README.md)**
+for every flag, default, authentication flow, exit code, output format and integration.
+The release command copies only the tool and its generic documentation into a new
+directory. It includes no program workspaces, captured JavaScript, account state,
+local machine details or Git history. It does not publish anything.
 
-- [x] Methodology, tooling, templates, scaffold script
-- [x] Personio selected and scoped
-- [ ] Personio trial tenants created and seeded
-- [ ] Identifier inventory built
-- [ ] First submission
+## Keep research private
+
+This repository's public tree is limited to the automation tool, generic examples,
+tests and documentation. Store captures, reports, headers and sessions under `recon/`;
+that directory and local program workspaces are ignored. A publication check rejects
+tracked files outside the tool allowlist and obvious embedded credentials or local
+user paths. Ignoring a file does not remove it from an earlier Git commit. Use the
+clean release export when sharing the tool without older repository history.
+
+## Feedback
+
+Please feel free to [open an issue](https://github.com/LahsenAitOiahmane/bugbountyzzz/issues)
+about errors, unsupported frameworks or non-working elements. Include your Node.js
+version, a sanitized command, the error and a minimal local reproduction when possible.
+Remove target-sensitive URLs, extracted code, credentials, session data and personal
+information before sharing.

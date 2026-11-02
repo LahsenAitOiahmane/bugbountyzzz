@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extractHtml, extractJs } from '../lib/extract.mjs';
-import { Scope, Budget, normalizeUrl } from '../lib/scope.mjs';
+import { Scope, Budget, normalizeUrl, normalizeSeed } from '../lib/scope.mjs';
+
+test('hostname-only seed uses HTTPS without expanding exact-origin scope', () => {
+  assert.equal(normalizeSeed('app.example.com/path?q=1'), 'https://app.example.com/path?q=1');
+  const scope = new Scope('app.example.com');
+  assert.equal(scope.seed, 'https://app.example.com/');
+  assert.equal(scope.allows('https://app.example.com/a', 'page'), true);
+  assert.equal(scope.allows('https://cdn.example.com/a.js', 'asset'), false);
+});
 
 test('HTML scripts, modulepreloads, base URL, handlers, frames and Next manifests', () => {
   const result = extractHtml(`<!doctype html><base href="/app/">

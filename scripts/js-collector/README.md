@@ -22,8 +22,11 @@ require that download. Versions are recorded in `package-lock.json`.
 ## Collect
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --out programs/example/recon/js/run-01
+node scripts/js-collector/cli.mjs example.com --out recon/example/run-01
 ```
+
+A hostname-only seed uses HTTPS. It still authorizes only that exact origin; it
+does not implicitly include subdomains, a CDN, HTTP or another port.
 
 Default mode combines a real browser session with recursive asset downloads. It
 follows HTML links up to depth 2, accepts up to 25 page URLs and 1,000 external
@@ -40,7 +43,7 @@ node scripts/js-collector/cli.mjs https://app.example.com --mode static --out pr
 For an additional page origin and an asset CDN:
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --origin https://www.example.com --asset-origin https://cdn.example.com --exclude '/(?:logout|signout|delete)(?:[/?#]|$)' --delay 1000 --out programs/example/recon/js/run-02
+node scripts/js-collector/cli.mjs https://app.example.com --origin https://www.example.com --asset-origin https://cdn.example.com --exclude '/(?:logout|signout|delete)(?:[/?#]|$)' --delay 1000 --out recon/example/run-02
 ```
 
 Scope uses **exact origins**, including scheme and port. Adding `https://example.com`
@@ -54,13 +57,51 @@ The rate and limits are configurable; select values appropriate to the program.
 Do not assume a link is harmless just because it uses GET. Exclude logout and any
 application-specific action URLs before authenticated crawling.
 
+### Collector options
+
+| Option | Meaning and default |
+|---|---|
+| `--out DIR` | New output directory; default `recon/js/<host>-<timestamp>`. |
+| `--mode hybrid\|static` | Browser plus recursive downloads, or HTTP only; default `hybrid`. |
+| `--origin ORIGIN` | Add an exact page/API origin; repeatable. |
+| `--asset-origin ORIGIN` | Add an exact asset-only origin; repeatable. |
+| `--exclude REGEX` | Reject a complete URL matching the expression; repeatable. |
+| `--seeds FILE` | Import URL lines or Katana JSONL discoveries; repeatable. |
+| `--headers-file FILE` | JSON headers applied only to the starting origin. |
+| `--storage-state FILE` | Load private Playwright cookies and browser storage. |
+| `--save-storage-state FILE` | Save updated state to a new private file. |
+| `--session-flow FILE` | Run an explicit bounded login/consent flow. |
+| `--allow-post-url REGEX` | Permit POST to a matching scoped URL; repeatable. |
+| `--researcher HANDLE` | Send the public `X-Intigriti-Username` attribution header to approved origins. |
+| `--auth-policy stop\|record` | Pause at authentication or keep mapping other public pages; default `stop`. |
+| `--auth-path PATH` | Add a known authentication entry path without guessing; repeatable. |
+| `--strict-assets` | Fetch strong dependency evidence from extra asset origins and retain weak strings unfetched. |
+| `--headed` | Show the browser window. |
+| `--manual-seconds N` | Allow manual navigation for N seconds in hybrid mode. |
+| `--depth N` | Page-link depth; default `2`. |
+| `--max-pages N` | Page-record limit; default `25`. |
+| `--max-assets N` | External and inline asset limit; default `1000`. |
+| `--max-requests N` | Shared browser/HTTP request limit; default `2000`. |
+| `--delay MS` | Minimum spacing between request starts; default `500`. |
+| `--duration SECONDS` | Request scheduling window; default `300`. |
+| `--timeout MS` | Per-request/navigation timeout; default `20000`. |
+| `--settle MS` | Browser observation window per page; default `1500`. |
+| `--max-bytes N` | Per-file decoded-byte limit; default `20971520`. |
+| `--max-total-bytes N` | Saved-content limit; default `209715200`. |
+| `--max-sources N` | Embedded source-map entry limit; default `5000`. |
+| `--no-source-maps` | Skip source-map retrieval and extraction. |
+| `--help` | Print canonical CLI usage. |
+
+Repeatable options may appear more than once. Numeric values are integers; `depth`,
+`settle` and `manual-seconds` may be zero, while other numeric limits must be positive.
+
 ## Authentication and manual exploration
 
 An existing Playwright storage-state JSON can provide scoped cookies and browser
 local storage. Keep it in a gitignored `storage-state*.json` file:
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --storage-state storage-state-example.json --headed --out programs/example/recon/js/auth-01
+node scripts/js-collector/cli.mjs https://app.example.com --storage-state storage-state-example.json --headed --out recon/example/auth-01
 ```
 
 For a session or attribution header, create a gitignored `auth-headers-example.json`:
@@ -73,7 +114,7 @@ For a session or attribution header, create a gitignored `auth-headers-example.j
 ```
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --headers-file auth-headers-example.json --out programs/example/recon/js/auth-02
+node scripts/js-collector/cli.mjs https://app.example.com --headers-file auth-headers-example.json --out recon/example/auth-02
 ```
 
 Explicit headers are attached **only to the starting origin**, even if other page
@@ -94,7 +135,7 @@ not capture sessionStorage or automatically solve MFA, CAPTCHA, or bot challenge
 To open menus or navigate routes yourself while recording newly loaded scripts:
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --storage-state storage-state-example.json --manual-seconds 120 --duration 300 --out programs/example/recon/js/manual-01
+node scripts/js-collector/cli.mjs https://app.example.com --storage-state storage-state-example.json --manual-seconds 120 --duration 300 --out recon/example/manual-01
 ```
 
 Manual mode opens Chromium, observes your navigation for the specified window,
@@ -300,6 +341,37 @@ All collection outputs should remain under a gitignored `recon/` directory. Raw
 HTML, inline data, scripts and URLs can contain session information or private
 application data. Request headers and storage state are not copied into manifests.
 
+## Offline JavaScript mapping and review
+
+Analyze a completed run without making target requests or executing its bundles:
+
+```powershell
+node scripts/js-collector/analyze.mjs recon/example/run-01 --out recon/example/analysis-01
+```
+
+The analysis verifies each original hash, formats a derived copy with Prettier,
+parses it with Acorn and writes `map.html`, `map.json`, per-module JSON and source,
+`endpoints.json`, grouped `endpoint-summary.json`, `routes.json`, `review-cues.json`, `decoded-strings.json` and
+`ANALYSIS.md`. It maps static/dynamic imports, exports and simple cross-module
+import bindings. It also indexes literal API paths and review cues such as HTML
+sinks, navigation, browser storage and cross-window messaging.
+
+These are bounded syntax heuristics. They do not prove reachability, data flow,
+server behavior, authorization failure or vulnerability impact. Re-export chains,
+computed calls and lexical shadowing can be incomplete or noisy. Formatting does
+not recover original variable names, and literal decoding is not an obfuscator
+runtime. Original files remain unchanged.
+
+Analyzer options:
+
+- `--out DIR`: required-new output directory; default is a timestamped directory
+  inside the collection.
+- `--no-beautify`: analyze original bodies without formatted source copies.
+- `--max-bytes N`: maximum bytes read from one source file; default 20 MiB.
+- `--help`: print analyzer usage.
+
+Use `node scripts/js-collector/analyze.mjs --help` for the canonical list.
+
 ## Existing-tool integration
 
 Playwright provides browser rendering and network observation; Acorn provides
@@ -310,7 +382,7 @@ Existing Katana output can extend the seed set. Accepts either one URL per line 
 Katana JSONL with `request.endpoint` fields:
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --seeds katana.jsonl --out programs/example/recon/js/katana-01
+node scripts/js-collector/cli.mjs https://app.example.com --seeds katana.jsonl --out recon/example/katana-01
 ```
 
 All imported URLs go through this collector's scope rules and budgets. Katana is
@@ -384,3 +456,10 @@ Upstream documentation:
 [Acorn](https://github.com/acornjs/acorn),
 [Next.js lazy loading](https://nextjs.org/docs/app/guides/lazy-loading),
 [Katana](https://github.com/projectdiscovery/katana).
+
+## Feedback
+
+Please feel free to open a GitHub issue about errors, unsupported frameworks or
+non-working elements. Include the Node.js version, a sanitized command and a small
+local reproduction. Remove target URLs, extracted code, credentials, cookies,
+session state and personal information before sharing.

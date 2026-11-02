@@ -3,10 +3,11 @@ import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Collector, defaults } from './lib/collector.mjs';
+import { normalizeSeed } from './lib/scope.mjs';
 
 const help = `js-collect — scoped client-side JavaScript collection
 
-Usage: node scripts/js-collector/cli.mjs <url> [options]
+Usage: node scripts/js-collector/cli.mjs <url-or-hostname> [options]
 
   --out DIR                 New output directory (default: recon/js/<host>-<time>)
   --mode hybrid|static      Browser + recursive downloads, or HTTP only (default hybrid)
@@ -40,7 +41,8 @@ Usage: node scripts/js-collector/cli.mjs <url> [options]
   --no-source-maps          Skip source-map collection
   --help                    Show this help
 
-Exact origins include scheme and port. No subdomains or CDNs are implicitly allowed.
+Hostname-only seeds use HTTPS. Exact origins include scheme and port.
+No subdomains or CDNs are implicitly allowed.
 Default browser mode requires: npm --prefix scripts/js-collector run browser:install
 `;
 
@@ -54,7 +56,7 @@ async function main() {
   const { values, positionals } = parseArgs({ options, allowPositionals: true });
   if (values.help) { console.log(help); return; }
   if (positionals.length !== 1) throw new Error('Provide one starting URL. Use --help for usage.');
-  const config = { url: positionals[0], mode: values.mode || defaults.mode,
+  const config = { url: normalizeSeed(positionals[0]), mode: values.mode || defaults.mode,
     origins: values.origin || [], assetOrigins: values['asset-origin'] || [],
     excludes: values.exclude || [], seeds: values.seeds || [],
     headed: !!values.headed, sourceMaps: !values['no-source-maps'], storageState: values['storage-state'],
