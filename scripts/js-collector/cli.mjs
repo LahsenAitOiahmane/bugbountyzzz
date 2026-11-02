@@ -22,6 +22,8 @@ Usage: node scripts/js-collector/cli.mjs <url> [options]
   --researcher HANDLE       Public X-Intigriti-Username header on every approved origin
   --auth-policy stop|record Pause page traversal for user login (default stop)
   --auth-path PATH          Explicit known auth entry path; repeatable, never guessed
+  --strict-assets           Extra asset origins: fetch declared/observed imports/chunks,
+                            record heuristic filename strings without fetching them
   --headed                  Show browser
   --manual-seconds N        Show browser for manual navigation, then HTTP collection
   --depth N                 Link depth (default 2)
@@ -48,7 +50,7 @@ async function main() {
     'max-bytes', 'max-total-bytes', 'max-sources'];
   const options = Object.fromEntries(strings.map(name => [name, { type: 'string' }]));
   for (const name of ['origin', 'asset-origin', 'exclude', 'seeds', 'allow-post-url', 'auth-path']) options[name] = { type: 'string', multiple: true };
-  for (const name of ['help', 'headed', 'no-source-maps']) options[name] = { type: 'boolean' };
+  for (const name of ['help', 'headed', 'no-source-maps', 'strict-assets']) options[name] = { type: 'boolean' };
   const { values, positionals } = parseArgs({ options, allowPositionals: true });
   if (values.help) { console.log(help); return; }
   if (positionals.length !== 1) throw new Error('Provide one starting URL. Use --help for usage.');
@@ -58,7 +60,7 @@ async function main() {
     headed: !!values.headed, sourceMaps: !values['no-source-maps'], storageState: values['storage-state'],
     saveStorageState: values['save-storage-state'], sessionFlow: values['session-flow'],
     postUrls: values['allow-post-url'] || [], researcher: values.researcher,
-    authPolicy: values['auth-policy'] || 'stop', authPaths: values['auth-path'] || [] };
+    authPolicy: values['auth-policy'] || 'stop', authPaths: values['auth-path'] || [], strictAssets: !!values['strict-assets'] };
   if (config.researcher && !/^[\w.-]+$/.test(config.researcher)) throw new Error('Invalid researcher handle');
   if (!['hybrid', 'static'].includes(config.mode)) throw new Error('--mode must be hybrid or static');
   const numeric = { 'manual-seconds': 'manualSeconds', depth: 'depth', 'max-pages': 'maxPages',
@@ -91,7 +93,10 @@ async function main() {
   console.log(`Outcome: ${result.outcome}. Saved ${result.savedScripts} script records (${result.uniqueFiles} unique files); ${result.requests} requests; stop: ${result.stopReason}.`);
   console.log('Coverage and errors: manifest.json, assets.jsonl, pages.jsonl, skipped.jsonl');
   console.log('Relationships: inventory.html, inventory.json, INVENTORY.md, page-index/');
-  if (result.authentication.paused) {
+  if (result.scopeDependencies.required) {
+    console.log('SCOPE CLARIFICATION REQUIRED: The page depends on excluded script origins. No automatic scope expansion was performed. See SCOPE-REQUIRED.md; a login/session alone will not resolve this restriction.');
+    process.exitCode = 4;
+  } else if (result.authentication.paused) {
     console.log('USER ACTION REQUIRED: Complete normal login/consent with your own authorized account and provide a local saved browser session (--storage-state). Do not paste passwords or session tokens into chat. See AUTH-REQUIRED.md; protected traversal is paused.');
     process.exitCode = 3;
   } else if (!result.savedScripts) process.exitCode = 2;

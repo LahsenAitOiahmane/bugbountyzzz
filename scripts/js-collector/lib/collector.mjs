@@ -6,6 +6,7 @@ import { Transport } from './transport.mjs';
 import { extractHtml, extractJs, isJsUrl } from './extract.mjs';
 import { AuthGate, authKind } from './auth.mjs';
 import { buildInventory, writeInventory } from './inventory.mjs';
+import { assessScopeDependencies } from './scope-dependencies.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const JS_TYPE = /(?:javascript|ecmascript)/i;
@@ -54,6 +55,7 @@ export class Collector {
     this.network = [];
     this.inflightBrowser = new Set();
     this.calls = new Map();
+    this.browserErrors = [];
   }
 
   skip(url, reason, parent = null) {
@@ -76,6 +78,10 @@ export class Collector {
     if (!this.scope.allows(url, role)) { this.skip(url, 'outside-scope', parent); return null; }
     const records = kind === 'page' ? this.pages : this.assets;
     if (records.has(url)) return records.get(url);
+    if (this.options.strictAssets && role === 'asset' && !this.scope.origins.has(new URL(url).origin) &&
+        ['js-string', 'js-literal', 'json-string'].includes(via)) {
+      this.skip(url, 'unverified-script-reference', parent); return null;
+    }
     if (kind === 'page' && depth > this.options.depth) { this.skip(url, 'depth-limit', parent); return null; }
     if (records.size >= (kind === 'page' ? this.options.maxPages : this.options.maxAssets)) {
       this.skip(url, `${kind === 'page' ? 'page' : 'asset'}-limit`, parent); return null;
@@ -91,6 +97,11 @@ export class Collector {
     if (pageRecord) {
       pageRecord.signals = result.signals;
       pageRecord.baseUrl = result.base;
+      pageRecord.scriptReferences = result.scripts.slice(0, 5000).map(item => {
+        const target = normalizeUrl(item.value, result.base);
+        return target ? { url: target, via: item.via, inScope: this.scope.allows(target, 'asset') } : null;
+      }).filter(Boolean);
+      if (result.scripts.length > 5000) this.warnings.add('Page script-reference metadata limit reached (5000)');
       pageRecord.links = result.linkDetails.map(link => ({ ...link, inScope: this.scope.allows(link.url, 'page'),
         authHint: authKind(link.url) || (/\b(?:log\s*in|sign\s*in|inloggen|aanmelden)\b/i.test(link.text) ? 'login-link' : null) }));
       if (!this.bootstrapping) this.auth.page(pageRecord, result.signals);
@@ -258,11 +269,14 @@ export class Collector {
       const request = route.request();
       const url = request.url();
       const type = request.resourceType();
+      const requestHeaders = request.headers();
+      const speculative = /prefetch/i.test(`${requestHeaders['sec-purpose'] || ''} ${requestHeaders.purpose || ''}`);
       let pageUrl = this.activePageUrl || this.scope.seed;
       try { const frameUrl = request.frame().url(); if (normalizeUrl(frameUrl)) pageUrl = frameUrl; } catch { /* worker */ }
       if (request.isNavigationRequest()) pageUrl = url;
       const role = request.isNavigationRequest() || ['fetch', 'xhr', 'eventsource'].includes(type) ? 'page' : 'asset';
       const block = !this.scope.allows(url, role) ? 'outside-scope' :
+        speculative ? 'speculative-prefetch-deferred' :
         !['GET', 'HEAD', 'OPTIONS'].includes(request.method()) &&
           !(request.method() === 'POST' && this.postUrls.some(re => re.test(url))) ? 'non-read-method' :
         ['image', 'media', 'font', 'eventsource'].includes(type) ? 'unneeded-resource' :
@@ -326,6 +340,9 @@ export class Collector {
       if (page !== this.page) page.close().catch(() => {});
     });
     this.page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
+    this.page.on('pageerror', error => {
+      if (this.browserErrors.length < 100) this.browserErrors.push({ url: this.page.url(), message: error.message.slice(0, 2000) });
+    });
     if (this.options.manualSeconds) {
       this.page.on('domcontentloaded', () => {
         this.track((async () => {
@@ -455,6 +472,27 @@ export class Collector {
     } finally { await this.checkpoint('session-flow'); this.bootstrapping = false; }
   }
 
+  async captureRenderedPage(record, response) {
+    const url = this.page.url();
+    if (!this.scope.allows(url, 'page')) return;
+    const html = await this.page.content();
+    const target = this.pages.get(url) || this.enqueue(url, record.url, 'browser-route', 'page', record.depth);
+    if (!target) {
+      // A page cap must not hide a login boundary reached by client-side routing.
+      const result = extractHtml(html, url);
+      this.auth.page({ url, finalUrl: url, status: response?.status() || record.status || 200 }, result.signals);
+      return;
+    }
+    if (!target.domSnapshot) {
+      const snapshot = { id: `${url}#rendered-dom`, url };
+      await this.store.save(snapshot, Buffer.from(html), 'pages', 'html');
+      target.domSnapshot = { path: snapshot.path, sha256: snapshot.sha256, bytes: snapshot.bytes };
+      if (!target.path) Object.assign(target, { ...target.domSnapshot, state: 'saved', status: response?.status() || record.status || 200,
+        statusEvidence: 'inherited-document-response', documentUrl: record.finalUrl || record.url, transport: 'browser-dom' });
+    }
+    await this.processHtml(html, url, record.depth, target);
+  }
+
   async browse(record) {
     this.currentDepth = record.depth;
     record.state = 'loading';
@@ -470,9 +508,9 @@ export class Collector {
           await sleep(Math.min(500, Math.max(0, end - Date.now())));
         }
       }
-      const url = this.page.url();
+      await this.drain();
       if (response && [401, 403, 429].includes(response.status())) await this.checkpoint(`http-${response.status()}`);
-      else if (this.scope.allows(url, 'page')) await this.processHtml(await this.page.content(), url, record.depth);
+      else await this.captureRenderedPage(record, response);
     } catch (error) { record.navigationError = error.message; }
     await this.drain();
     await this.transport.seedCookies(await this.context.cookies(), true);
@@ -564,8 +602,13 @@ export class Collector {
     const blockers = [...this.pages.values()].filter(r => r.navigationError || ['error', 'http-error'].includes(r.state))
       .map(r => ({ url: r.url, status: r.status, reason: r.error || r.navigationError || `HTTP ${r.status}` }));
     for (const r of this.skipped.values()) if (r.reason === 'outside-scope' && [...this.pages.values()].some(p => p.finalUrl === r.url)) blockers.push(r);
+    const scopeDependencies = assessScopeDependencies([...this.pages.values()], records);
+    const incomplete = Object.keys(limitsHit).length || blockers.length || queued.length || this.budget.reason || this.browserErrors.length ||
+      records.some(r => ['error', 'http-error', 'not-javascript', 'not-map'].includes(r.state));
     this.summary = { startedAt: this.started, endedAt: new Date().toISOString(), seed: this.scope.seed,
-      outcome: failure ? 'failed' : this.auth.paused ? 'needs-auth' : savedScripts ? Object.keys(limitsHit).length || blockers.length ? 'partial' : 'collected' : blockers.length ? 'blocked' : 'empty',
+      outcome: failure ? 'failed' : scopeDependencies.required ? 'blocked' : this.auth.paused ? 'needs-auth' : savedScripts ? incomplete ? 'partial' : 'collected' : blockers.length ? 'blocked' : 'empty',
+      browserErrorCount: this.browserErrors.length,
+      scopeDependencies,
       authentication: this.auth.describe(),
       savedScripts, scriptsByOrigin, limitsHit, blockers,
       assetErrors: records.filter(r => ['error', 'http-error'].includes(r.state)).length,
@@ -573,7 +616,7 @@ export class Collector {
       savedBytes: this.store.bytes, uniqueFiles: this.store.blobs.size,
       pages: this.pages.size, assets: this.assets.size, inline: this.inline.size, sourceEntries: this.sourceCount,
       states: counts, queued: queued.length, skipped: this.skipped.size,
-      stopReason: failure ? 'fatal-error' : this.auth.paused ? 'authentication-required' : this.budget.reason || 'discovery-exhausted',
+      stopReason: failure ? 'fatal-error' : scopeDependencies.required ? 'out-of-scope-script-dependency' : this.auth.paused ? 'authentication-required' : this.budget.reason || 'discovery-exhausted',
       warnings: [...this.warnings], fatalError: failure?.message,
       limits: Object.fromEntries(['depth', 'maxPages', 'maxAssets', 'maxRequests', 'maxBytes', 'maxTotalBytes', 'maxSources', 'delay', 'duration'].map(key => [key, this.options[key]])),
       coverage: 'Reachable client assets only; no guarantee of all scripts or server-side source. See skipped.jsonl, pages.jsonl and assets.jsonl.' };
@@ -584,11 +627,18 @@ export class Collector {
     await this.store.jsonl('skipped.jsonl', [...this.skipped.values()]);
     await this.store.jsonl('network.jsonl', this.network);
     await this.store.json('session.json', this.sessionEvents);
+    await this.store.jsonl('browser-errors.jsonl', this.browserErrors);
     await this.store.jsonl('calls.jsonl', [...this.calls.values()]);
     const inventory = buildInventory({ pages: [...this.pages.values()], assets: records, edges: this.edges,
       calls: [...this.calls.values()], network: this.network, scope: this.scope, auth: this.auth,
       session: { storageStateProvided: !!this.options.storageState, explicitSessionFlowProvided: !!this.options.sessionFlow } });
     await writeInventory(this.store, inventory);
+    if (scopeDependencies.required) {
+      await this.store.json('scope-required.json', scopeDependencies);
+      await writeFile(path.join(this.store.root, 'SCOPE-REQUIRED.md'), '# Scope clarification required\n\n' +
+        scopeDependencies.blockedPages.map(p => `Page: ${p.pageUrl}\n\n${p.reason}\n\nBlocked entries:\n${p.entryScripts.map(url => `- ${url}`).join('\n')}\n`).join('\n') +
+        `\n${scopeDependencies.nextStep}\n\nSuggested program question: Does the application scope authorize downloading the static JavaScript assets it directly references on the excluded CDN solely for application analysis, without testing the CDN infrastructure?\n`);
+    }
     if (this.auth.required) {
       const resume = new Set([this.scope.seed, ...[...this.pages.values()].filter(p => p.state === 'deferred-auth').map(p => p.url),
         ...[...this.auth.requirements.values()].flatMap(r => r.protectedUrls).filter(Boolean)]);

@@ -1,8 +1,9 @@
-import { writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { hash } from './store.mjs';
 import { authKind } from './auth.mjs';
 import { normalizeUrl } from './scope.mjs';
+import { assessScopeDependencies } from './scope-dependencies.mjs';
 
 const scriptKinds = new Set(['script', 'inline-script', 'inline-handler']);
 const md = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -36,9 +37,13 @@ export function buildInventory({ pages, assets, edges, calls, network, scope, au
       return { ...c, url, resolvedForPage: record.id, inScope: !!url && scope.allows(url, 'page') };
     });
     return { id: record.id, url: record.url, finalUrl: record.finalUrl || record.url, type, status: record.status,
-      state: record.state, depth: record.depth, htmlPath: record.path || null, title: record.signals?.title || '',
+      state: record.state, depth: record.depth, htmlPath: record.domSnapshot?.path || record.path || null,
+      rawHtmlPath: record.transport === 'browser-dom' ? null : record.path || null,
+      htmlEvidence: record.domSnapshot ? 'rendered-DOM' : 'HTTP-response', statusEvidence: record.statusEvidence || 'HTTP-response',
+      title: record.signals?.title || '',
       description: record.signals?.description || '', headings: record.signals?.headings || [],
-      forms: record.signals?.forms || [], links: record.links || [],
+      forms: record.signals?.forms || [], controls: record.signals?.controls || [], links: record.links || [],
+      blockedScriptReferences: (record.scriptReferences || []).filter(r => !r.inScope),
       directScripts: [...new Set(direct)], relatedScripts: [...dependencies],
       observedCalls: observed, inferredCalls: inferred,
       note: 'Page role and static calls are evidence-based hints. They do not prove server behavior, authentication or a vulnerability.' };
@@ -67,7 +72,7 @@ export function buildInventory({ pages, assets, edges, calls, network, scope, au
     const group = contentGroups.get(script.sha256); group.scriptIds.push(script.id);
     for (const page of script.usedByPages) group.pageIds.add(page);
   }
-  return { version: 1, scope: scope.describe(), authentication: auth.describe(), session, pages: pageList, scripts,
+  return { version: 1, scope: scope.describe(), scopeDependencies: assessScopeDependencies(pages, assets), authentication: auth.describe(), session, pages: pageList, scripts,
     sharedContent: [...contentGroups.values()].filter(g => g.scriptIds.length > 1).map(g => ({ ...g, pageIds: [...g.pageIds] })),
     legend: { usedByPages: 'Declared directly by HTML/inline code or observed by the browser; does not prove execution.',
       referencedByPages: 'Transitive references, including manifest catalogs and conditional chunks; not necessarily loaded.',
@@ -91,9 +96,10 @@ body{font:16px system-ui;margin:0;background:#f5f4ef;color:#202828}main{max-widt
 <script type="application/json" id="inventory-data">${data}</script><script>
 const data=JSON.parse(document.getElementById('inventory-data').textContent), scripts=new Map(data.scripts.map(s=>[s.id,s]));
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const local=p=>p&&!p.includes('..')&&['pages','scripts','inline-script','inline-handler'].includes(p.split('/')[0])?'<a href="'+esc(p)+'" target="_blank" rel="noreferrer">local file</a>':'';
+const local=p=>p&&!p.includes('..')&&['pages','scripts','inline-script','inline-handler'].includes(p.split('/')[0])?p.startsWith('pages/')?'<a href="'+esc(p)+'.txt" target="_blank" rel="noreferrer">HTML source</a>':'<a href="'+esc(p)+'" target="_blank" rel="noreferrer">local file</a>':'';
 document.getElementById('counts').textContent=data.counts.pages+' page records · '+data.counts.scripts+' script records · '+data.sharedScripts.length+' shared scripts · '+data.counts.staticCalls+' static call references';
 if(data.authentication.required)document.getElementById('auth').innerHTML='<aside><b>User session needed</b>'+data.authentication.requirements.map(r=>'<p>'+esc(r.action)+'<br><code>'+esc(r.loginUrl||r.protectedUrl||r.pageUrl)+'</code></p>').join('')+'</aside>';
+if(data.scopeDependencies?.required)document.getElementById('auth').innerHTML+='<aside><b>Scope clarification needed</b><p>'+esc(data.scopeDependencies.nextStep)+'</p><p>'+data.scopeDependencies.blockedOrigins.map(esc).join('<br>')+'</p></aside>';
 function scriptList(ids){return '<ul>'+ids.map(id=>{const s=scripts.get(id);return '<li><code>'+esc(id)+'</code> '+local(s?.path)+'<br><small>'+esc(s?.kind)+' · directly declared/observed on '+esc(s?.usedByPages.length)+' page(s) · browser-observed on '+esc(s?.observedByPages.length)+' page(s)</small>'+(s?.references.length?'<details><summary>References ('+s.references.length+'), including '+s.dependsOn.length+' literal module/worker dependencies</summary><ul>'+s.references.map(ref=>'<li><code>'+esc(ref)+'</code> '+local(scripts.get(ref)?.path)+'</li>').join('')+'</ul></details>':'')+'</li>'}).join('')+'</ul>'}
 function render(){
  const q=document.getElementById('filter').value.toLowerCase();
@@ -101,8 +107,10 @@ function render(){
   const indirect=p.relatedScripts.filter(id=>!p.directScripts.includes(id));
   return '<article><h2>'+esc(p.title||p.url)+'</h2><span class="badge">'+esc(p.type)+' · '+esc(p.state)+' · '+esc(p.status||'—')+'</span><p><code>'+esc(p.url)+'</code> '+local(p.htmlPath)+'</p><p>'+esc(p.description)+'</p>'+
    '<details><summary>Forms ('+p.forms.length+')</summary><ul>'+p.forms.map(f=>'<li><code>'+esc(f.method)+' '+esc(f.action)+'</code><br>Fields: '+f.fields.map(x=>esc(x.name||x.type)+' ['+esc(x.type)+']').join(', ')+'</li>').join('')+'</ul></details>'+
+   '<details><summary>Visible buttons ('+p.controls.length+')</summary><ul>'+p.controls.map(c=>'<li>'+esc(c.text)+' · '+esc(c.type)+'</li>').join('')+'</ul></details>'+
    '<details><summary>Direct scripts: declared or observed ('+p.directScripts.length+')</summary>'+scriptList(p.directScripts)+'</details>'+
    '<details><summary>Indirect references / catalog chunks ('+indirect.length+')</summary><p class="hint">These references may describe unvisited routes and conditional code; they were not necessarily loaded.</p>'+scriptList(indirect)+'</details>'+
+   '<details><summary>Outside-scope script references ('+p.blockedScriptReferences.length+')</summary><ul>'+p.blockedScriptReferences.map(r=>'<li><code>'+esc(r.url)+'</code> · '+esc(r.via)+' · not fetched</li>').join('')+'</ul></details>'+
    '<details><summary>Observed fetch/XHR ('+p.observedCalls.length+')</summary><ul>'+p.observedCalls.map(c=>'<li><code>'+esc(c.method)+' '+esc(c.url)+' → '+esc(c.status)+'</code></li>').join('')+'</ul></details>'+
    '<details><summary>Static call references ('+p.inferredCalls.length+')</summary><p class="hint">Possible calls from the referenced script tree, including catalogs. These endpoints were not fetched merely because the parser found them.</p><ul>'+p.inferredCalls.map(c=>'<li><code>'+esc(c.method)+' '+esc(c.url||c.rawUrl)+'</code><br><small>Source: '+esc(c.sourceId)+'</small> '+local(scripts.get(c.sourceId)?.path)+'</li>').join('')+'</ul></details></article>';
  }).join('');
@@ -111,6 +119,10 @@ document.getElementById('filter').addEventListener('input',render);render();</sc
 }
 
 export async function writeInventory(store, inventory) {
+  for (const relative of new Set(inventory.pages.flatMap(p => [p.htmlPath, p.rawHtmlPath]).filter(Boolean))) {
+    if (!relative.startsWith('pages/') || relative.includes('..')) throw new Error('Unsafe HTML source path in inventory');
+    await writeFile(path.join(store.root, `${relative}.txt`), await readFile(path.join(store.root, relative)));
+  }
   await store.json('inventory.json', inventory);
   await writeFile(path.join(store.root, 'inventory.html'), renderInventory(inventory));
   await mkdir(path.join(store.root, 'page-index'), { recursive: true });
@@ -123,6 +135,7 @@ export async function writeInventory(store, inventory) {
       `Role: ${p.type}. HTTP: ${p.status || 'unknown'}. State: ${p.state}.`, '',
       md(p.description), '', `HTML: ${p.htmlPath || 'not saved'}. Details: ${file}.`, '',
       `Direct script references: ${p.directScripts.length}; related scripts including dependencies: ${p.relatedScripts.length}.`, '',
+      `Outside-scope script references not fetched: ${p.blockedScriptReferences.length}.`, '',
       `Observed fetch/XHR calls: ${p.observedCalls.length}; static call references: ${p.inferredCalls.length}.`, '');
     for (const f of p.forms) lines.push(`- Form: ${md(f.method)} ${md(f.action)}; fields: ${(f.fields || []).map(x => md(`${x.name || '(unnamed)'} [${x.type}]`)).join(', ')}`);
   }

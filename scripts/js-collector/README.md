@@ -40,7 +40,7 @@ node scripts/js-collector/cli.mjs https://app.example.com --mode static --out pr
 For an additional page origin and an asset CDN:
 
 ```powershell
-node scripts/js-collector/cli.mjs https://app.example.com --origin https://www.example.com --asset-origin https://cdn.example.com --exclude '/logout|/signout|/delete' --delay 1000 --out programs/example/recon/js/run-02
+node scripts/js-collector/cli.mjs https://app.example.com --origin https://www.example.com --asset-origin https://cdn.example.com --exclude '/(?:logout|signout|delete)(?:[/?#]|$)' --delay 1000 --out programs/example/recon/js/run-02
 ```
 
 Scope uses **exact origins**, including scheme and port. Adding `https://example.com`
@@ -193,6 +193,41 @@ worker-relative URLs and branches behind interaction may need browser exploratio
 or manual source review. Browser prefetch/XHR activity counts against the request
 budget even when the page-record limit prevents crawling those documents.
 
+### Script dependencies blocked by scope
+
+An application can serve its HTML from an allowed host while loading the actual
+application code from an excluded CDN. If a page declares excluded script
+entries and none of its directly referenced external scripts was collected, the
+run reports `blocked` / `out-of-scope-script-dependency` instead of `empty`.
+The CLI exits **4**, prints **SCOPE CLARIFICATION REQUIRED**, and writes
+`SCOPE-REQUIRED.md` / `scope-required.json`. The inventory retains the excluded
+script URLs and labels them as not fetched.
+
+This reflects the collection configuration, not a conclusion that normal
+retrieval of an app's published dependencies is itself CDN infrastructure
+testing. Authorized published-asset retrieval is configured separately with
+`--asset-origin`; it does not enable CDN page crawling or API calls. Follow the
+user's authorized task and the program context when setting these roles. If that
+distinction is unclear, resolve it rather than automatically expanding testing
+origins. Logging in alone does not change the configured origins.
+
+Use `--strict-assets` for extra asset origins when only published dependencies
+should be fetched: HTML declarations, browser-observed scripts, literal imports,
+worker/script-source references, bundler chunk maps and explicit source maps.
+Heuristic filename strings found in comments, debug messages or examples remain
+in the discovery graph as unfetched references. CDN APIs and pages stay blocked.
+Browser speculative prefetch requests are deferred by default; their discovered
+asset references remain queued so startup/login code can load first and files
+can be downloaded once.
+
+Rendered DOM snapshots are kept separately from raw HTTP HTML. Client-side route
+changes such as `history.replaceState(..., '/login')` receive their own page
+record, with inherited HTTP status explicitly labeled rather than inventing a
+document request. Browser JavaScript errors are recorded in browser-errors.jsonl.
+HTML-source links open derived `.html.txt` copies as text rather than executing
+the captured application. Inspect the source in that view or a code editor;
+the preserved raw snapshot still contains its original script links.
+
 ## Discovery stages
 
 1. Parse source HTML and rendered DOM: external scripts, module preloads,
@@ -340,7 +375,8 @@ environment variable, cookie export/reuse, loop detection and denial diagnostics
 Browser tests skip if Chromium is absent; install Chromium to run them.
 
 Exit codes: `0` collection has saved script records, `1` fatal/configuration error,
-`2` no scripts saved, `3` user authentication/consent handoff required. A successful exit does not certify complete coverage or absence of
+`2` no scripts saved, `3` user authentication/consent handoff required, `4` excluded
+script dependencies require scope clarification. A successful exit does not certify complete coverage or absence of
 errors; consult the output indexes.
 
 Upstream documentation:

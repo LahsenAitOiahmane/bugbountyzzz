@@ -115,6 +115,7 @@ test('CLI pauses at a public login page, keeps its scripts and forms, requests a
   const login = inventory.pages.find(p => p.url.endsWith('/login'));
   assert.equal(login.type, 'login');
   assert.equal(login.forms[0].action, `${origin}/session`);
+  assert.equal(login.controls[0].text, 'Sign in');
   assert.deepEqual(login.forms[0].fields.map(f => f.name), ['email', 'password', 'csrf']);
   assert.ok(login.relatedScripts.includes(`${origin}/login.js`));
   assert.ok(inventory.pages.some(p => p.state === 'deferred-auth'));
@@ -165,5 +166,92 @@ test('browser login handoff stops protected traversal and produces a working off
     assert.equal(await page.locator('article').count(), 1);
     assert.equal(errors.length, 0);
     assert.equal(await page.evaluate(() => globalThis.inventoryInjected), undefined);
+    const sourceView = page.context().waitForEvent('page');
+    await page.getByRole('link', { name: 'HTML source' }).click();
+    const sourcePage = await sourceView;
+    await sourcePage.waitForLoadState();
+    assert.ok(sourcePage.url().endsWith('.html.txt'));
+    assert.match(await sourcePage.locator('body').innerText(), /<html|<title/i);
+    await sourcePage.close();
+    assert.ok(page.url().endsWith('inventory.html'), 'HTML source should open as text rather than execute the captured application');
   } finally { await browser.close(); }
+});
+
+test('an excluded CDN entry produces a scope handoff instead of an empty-success or login request', async t => {
+  let cdnHits = 0;
+  const cdn = await serve(t, (req, res) => { cdnHits++; send(res, 'text/javascript', 'globalThis.cdn=true;'); });
+  const origin = await serve(t, (req, res) => send(res, 'text/html', `<title>Application</title><script src="${cdn}/main.js"></script><link rel="modulepreload" href="${cdn}/dep.js">`));
+  const out = await output();
+  await assert.rejects(run(process.execPath, [cli, origin, '--mode', 'static', '--delay', '1', '--out', out]), error => {
+    assert.equal(error.code, 4); assert.match(error.stdout, /SCOPE CLARIFICATION REQUIRED/); return true;
+  });
+  const manifest = await read(out, 'manifest.json');
+  assert.equal(manifest.outcome, 'blocked');
+  assert.equal(manifest.stopReason, 'out-of-scope-script-dependency');
+  assert.equal(manifest.authentication.required, false);
+  assert.equal(manifest.requests, 1);
+  assert.equal(cdnHits, 0);
+  assert.deepEqual(manifest.scopeDependencies.blockedOrigins, [cdn]);
+  const inventory = await read(out, 'inventory.json');
+  assert.equal(inventory.pages[0].blockedScriptReferences.length, 2);
+  assert.equal((await read(out, 'scope-required.json')).required, true);
+  const allowed = await output();
+  const allowedResult = await new Collector({ url: origin, out: allowed, mode: 'static', delay: 1, assetOrigins: [cdn] }).run();
+  assert.equal(allowedResult.scopeDependencies.required, false);
+  assert.equal(allowedResult.savedScripts, 2);
+});
+
+test('asset-only CDN retrieval supports SPA login inventory while CDN APIs/pages and speculative requests remain blocked', async t => {
+  if (!await browserAvailable(t)) return;
+  const cdnHits = [], appHits = [];
+  let app;
+  const cdn = await serve(t, (req, res) => {
+    cdnHits.push(req.url);
+    if (req.url === '/main.js') return send(res, 'text/javascript', `
+      history.replaceState(null,'','/login');
+      document.getElementById('root').innerHTML='<h1>Sign in</h1><form action="/session" method="post"><input name="email"><input name="password" type="password"></form>';
+      fetch(${JSON.stringify('PLACEHOLDER')}).catch(()=>{});`.replace(JSON.stringify('PLACEHOLDER'), JSON.stringify(`${cdn}/api/forbidden`)), 200, { 'access-control-allow-origin': '*' });
+    return send(res, 'text/javascript', 'void 0;', 200, { 'access-control-allow-origin': '*' });
+  });
+  app = await serve(t, (req, res) => {
+    appHits.push(req.url);
+    send(res, 'text/html', `<title>Application</title><div id="root"></div><script defer src="${cdn}/main.js"></script>
+      <link rel="prefetch" as="script" href="${cdn}/lazy.js"><iframe src="${cdn}/forbidden-page"></iframe>`);
+  });
+  const out = await output();
+  const result = await new Collector({ url: app, out, mode: 'hybrid', assetOrigins: [cdn], delay: 5, settle: 400 }).run();
+  assert.equal(result.outcome, 'needs-auth');
+  assert.equal(result.scopeDependencies.required, false);
+  assert.ok(cdnHits.includes('/main.js') && cdnHits.includes('/lazy.js'));
+  assert.ok(!cdnHits.includes('/api/forbidden') && !cdnHits.includes('/forbidden-page'));
+  assert.ok(!appHits.includes('/login'), 'The SPA route must be recorded without inventing a document GET');
+  const inventory = await read(out, 'inventory.json');
+  const login = inventory.pages.find(p => p.url === `${app}/login`);
+  assert.equal(login.type, 'login');
+  assert.equal(login.htmlEvidence, 'rendered-DOM');
+  assert.equal(login.statusEvidence, 'inherited-document-response');
+  assert.equal(login.forms[0].method, 'POST');
+  assert.ok(login.directScripts.includes(`${cdn}/main.js`));
+  const dom = await readFile(path.join(out, login.htmlPath), 'utf8');
+  assert.match(dom, /Sign in/);
+  const network = (await readFile(path.join(out, 'network.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(JSON.parse);
+  assert.ok(!network.some(n => n.url === `${cdn}/lazy.js` && n.transport === 'browser'));
+});
+
+test('strict asset retrieval fetches explicit imports while preserving debug filenames as unfetched references', async t => {
+  const hits = [];
+  const cdn = await serve(t, (req, res) => {
+    hits.push(req.url);
+    send(res, 'text/javascript', req.url === '/assets/main.js'
+      ? "import './DeleteTokenModal.js'; const debug='../node_modules/internal.js'; const example='../sample.js';" : 'export const ready=true;');
+  });
+  const app = await serve(t, (req, res) => send(res, 'text/html', `<script src="${cdn}/assets/main.js"></script>`));
+  const out = await output();
+  const result = await new Collector({ url: app, out, mode: 'static', delay: 1, assetOrigins: [cdn], strictAssets: true,
+    excludes: ['/(?:logout|signout|delete)(?:[/?#]|$)'] }).run();
+  assert.equal(result.savedScripts, 2);
+  assert.deepEqual(hits.sort(), ['/assets/DeleteTokenModal.js', '/assets/main.js']);
+  const graph = (await readFile(path.join(out, 'discovery.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(JSON.parse);
+  assert.ok(graph.some(e => e.target.endsWith('/node_modules/internal.js')));
+  assert.equal(new Scope(app, { excludes: ['/(?:logout|signout|delete)(?:[/?#]|$)'] }).allows(`${app}/delete/42`, 'page'), false);
 });

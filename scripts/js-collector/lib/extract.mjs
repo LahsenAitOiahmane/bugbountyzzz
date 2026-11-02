@@ -35,12 +35,14 @@ export function extractHtml(html, url) {
     .find(value => value?.includes('/_next/'));
   const nextPublicPath = nextScript ? nextScript.slice(0, nextScript.indexOf('/_next/') + 7) : null;
   const result = { base, scripts: [], links: [], linkDetails: [], inline: [], manifests: [], importMap: {},
-    signals: { passwordFields: 0, forms: [], headings: [], description: '', consentRoute: /consent|privacygate/i.test(new URL(url).pathname) } };
+    signals: { passwordFields: 0, forms: [], controls: [], headings: [], description: '', consentRoute: /consent|privacygate/i.test(new URL(url).pathname) } };
   for (const node of nodes) {
     const a = attrs(node);
     if (node.tagName === 'title') result.signals.title = (node.childNodes || []).map(n => n.value || '').join('');
     if (node.tagName === 'meta' && /^(?:description|og:description)$/i.test(a.name || a.property || '')) result.signals.description ||= (a.content || '').slice(0, 2000);
     if (/^h[1-3]$/.test(node.tagName || '') && result.signals.headings.length < 20) result.signals.headings.push(contentText(node).slice(0, 300));
+    if (node.tagName === 'button' && result.signals.controls.length < 100) result.signals.controls.push({
+      kind: 'button', type: a.type || 'submit', text: (a['aria-label'] || contentText(node)).slice(0, 300) });
     if (node.tagName === 'input' && a.type?.toLowerCase() === 'password') result.signals.passwordFields++;
     if (node.tagName === 'form' && result.signals.forms.length < 50) {
       const descendants = [];
@@ -219,7 +221,10 @@ export function extractJs(source, url, { importMap = {}, publicPath, parseAst = 
       } else if (!/^(?:\.{0,2}\/|https?:\/\/)/.test(value)) return;
     }
     const resolved = viteBase && value.startsWith('assets/') ? normalizeUrl(value, viteBase) : assetReference(value, url, publicPath);
-    if (resolved) references.push({ url: resolved, via });
+    if (resolved) {
+      const bundler = (viteBase && value.startsWith('assets/')) || /\/_next\/static\//.test(new URL(resolved).pathname) || /^static\/chunks\//.test(value);
+      references.push({ url: resolved, via: bundler && ['js-string', 'js-literal', 'json-string'].includes(via) ? 'bundler-chunk-reference' : via });
+    }
   };
   const text = source.replace(/\\\//g, '/').replace(/\\u002[fF]/g, '/');
   // Flight payloads contain nested escaped strings; AST literals alone miss these.
