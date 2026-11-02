@@ -30,6 +30,11 @@ cookies.txt
 *.key
 secrets.*
 
+# JavaScript collector dependencies and private session files
+node_modules/
+storage-state*.json
+auth-headers*.json
+
 # ─── Keep templates tracked ────────────────────────────────────────────────────
 # templates/ is committed on purpose — it is the blank scaffolding.
 !templates/*.md

@@ -17,6 +17,7 @@ Built around **Intigriti**, currently targeting **Personio** (Public · Open · 
 | [PERSONIO-SETUP.md](PERSONIO-SETUP.md) | Environment: two trial tenants, proxy, throttle, accounts. |
 | [PERSONIO-TEST-PLAN.md](PERSONIO-TEST-PLAN.md) | What to test on Personio, in priority order. |
 | [programs/personio/scope.md](programs/personio/scope.md) | Pre-filled scope, payout table, out-of-scope list. |
+| [scripts/js-collector/README.md](scripts/js-collector/README.md) | Browser/static JS collector: chunks, manifests, source maps, provenance and scope controls. |
 
 ---
 
@@ -51,6 +52,17 @@ Built around **Intigriti**, currently targeting **Personio** (Public · Open · 
 ---
 
 ## Quick start
+
+Collect a site's JavaScript (Node.js 22+, Windows/Linux/macOS):
+
+```bash
+npm --prefix scripts/js-collector ci
+npm --prefix scripts/js-collector run browser:install
+node scripts/js-collector/cli.mjs https://app.example.com --out programs/example/recon/js/run-01
+```
+
+See the [collector guide](scripts/js-collector/README.md) for exact scope origins,
+CDNs, authentication, manual browsing, HTTP-only mode and Katana seed imports.
 
 ```bash
 # install the recon toolchain (WSL / Kali / Debian)

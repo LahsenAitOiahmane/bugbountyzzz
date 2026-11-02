@@ -1,0 +1,20 @@
+{
+  "name": "bugbountyzzz-js-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scoped browser and static JavaScript collection for authorized reconnaissance",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "collect": "node cli.mjs",
+    "test": "node --test test/*.test.mjs",
+    "browser:install": "playwright install chromium"
+  },
+  "dependencies": {
+    "acorn": "8.19.0",
+    "acorn-walk": "^8.3.4",
+    "parse5": "^8.0.0",
+    "playwright": "1.64.1",
+    "tough-cookie": "^6.0.0"
+  }
+}
