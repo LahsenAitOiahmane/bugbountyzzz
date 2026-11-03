@@ -1,0 +1,10 @@
+{
+  "steps": [
+    { "action": "navigate", "url": "https://app.example.com/login" },
+    { "action": "fill", "selector": "input[name=email]", "origin": "https://app.example.com", "valueEnv": "COLLECTOR_LOGIN_EMAIL" },
+    { "action": "fill", "selector": "input[type=password]", "origin": "https://app.example.com", "valueEnv": "COLLECTOR_LOGIN_PASSWORD" },
+    { "action": "click", "selector": "button[type=submit]", "origin": "https://app.example.com" },
+    { "action": "wait-url", "pattern": "^https://app\\.example\\.com/dashboard(?:[/?#]|$)" },
+    { "action": "wait-selector", "selector": "[data-testid=dashboard]", "origin": "https://app.example.com" }
+  ]
+}

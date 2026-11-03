@@ -1,0 +1,17 @@
+# Normalise line endings on commit; keep working copies native.
+* text=auto
+
+# Shell scripts and Python must stay LF or they break on Linux/WSL
+# ("bad interpreter: /bin/bash^M").
+*.sh   text eol=lf
+*.py   text eol=lf
+*.bash text eol=lf
+
+# Documentation — LF everywhere, it diffs better
+*.md   text eol=lf
+
+# Binary-ish, never touch
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.pdf  binary
