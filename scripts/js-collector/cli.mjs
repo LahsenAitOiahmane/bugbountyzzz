@@ -23,7 +23,7 @@ Usage: node scripts/js-collector/cli.mjs <url-or-hostname> [options]
   --researcher HANDLE       Public X-Intigriti-Username header on every approved origin
   --auth-policy stop|record Pause page traversal for user login (default stop)
   --auth-path PATH          Explicit known auth entry path; repeatable, never guessed
-  --strict-assets           Extra asset origins: fetch declared/observed imports/chunks,
+  --strict-assets           Fetch declared/observed imports/chunks on all approved origins;
                             record heuristic filename strings without fetching them
   --headed                  Show browser
   --manual-seconds N        Show browser for manual navigation, then HTTP collection

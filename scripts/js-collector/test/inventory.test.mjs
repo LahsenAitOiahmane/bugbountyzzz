@@ -255,3 +255,20 @@ test('strict asset retrieval fetches explicit imports while preserving debug fil
   assert.ok(graph.some(e => e.target.endsWith('/node_modules/internal.js')));
   assert.equal(new Scope(app, { excludes: ['/(?:logout|signout|delete)(?:[/?#]|$)'] }).allows(`${app}/delete/42`, 'page'), false);
 });
+
+test('strict asset retrieval also skips heuristic filenames on the seed origin', async t => {
+  const hits = [];
+  const app = await serve(t, (req, res) => {
+    hits.push(req.url);
+    if (req.url === '/') return send(res, 'text/html', '<script src="/main.js"></script>');
+    if (req.url === '/main.js') return send(res, 'text/javascript', "import './chunk.js'; const sample='/cjs/react.production.js';");
+    if (req.url === '/chunk.js') return send(res, 'text/javascript', 'export const ready=true;');
+    return send(res, 'text/plain', 'missing', 404);
+  });
+  const out = await output();
+  const result = await new Collector({ url: app, out, mode: 'static', delay: 1, strictAssets: true }).run();
+  assert.equal(result.savedScripts, 2);
+  assert.deepEqual(hits.sort(), ['/', '/chunk.js', '/main.js']);
+  const graph = (await readFile(path.join(out, 'discovery.jsonl'), 'utf8')).split(/\r?\n/).filter(Boolean).map(JSON.parse);
+  assert.ok(graph.some(e => e.target === `${app}/cjs/react.production.js`));
+});

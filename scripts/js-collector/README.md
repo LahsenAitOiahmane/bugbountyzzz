@@ -57,6 +57,14 @@ The rate and limits are configurable; select values appropriate to the program.
 Do not assume a link is harmless just because it uses GET. Exclude logout and any
 application-specific action URLs before authenticated crawling.
 
+A repeatable run has three stages: collect the public entry page, capture a working
+browser session when the login handoff requests one, and collect the protected
+routes into a new directory with `--storage-state` and an optional `--seeds`
+file. Then run `analyze.mjs` against that final collection for an offline map.
+Check each run's `manifest.json` and `INVENTORY.md`; `needs-auth` means protected
+coverage has not been reached. Use `--strict-assets` to retain uncertain filename
+strings in the graph without making speculative requests for them.
+
 ### Collector options
 
 | Option | Meaning and default |
@@ -75,7 +83,7 @@ application-specific action URLs before authenticated crawling.
 | `--researcher HANDLE` | Send the public `X-Intigriti-Username` attribution header to approved origins. |
 | `--auth-policy stop\|record` | Pause at authentication or keep mapping other public pages; default `stop`. |
 | `--auth-path PATH` | Add a known authentication entry path without guessing; repeatable. |
-| `--strict-assets` | Fetch strong dependency evidence from extra asset origins and retain weak strings unfetched. |
+| `--strict-assets` | On all approved origins, fetch strong dependency evidence and retain heuristic filename strings unfetched. |
 | `--headed` | Show the browser window. |
 | `--manual-seconds N` | Allow manual navigation for N seconds in hybrid mode. |
 | `--depth N` | Page-link depth; default `2`. |
@@ -252,7 +260,7 @@ user's authorized task and the program context when setting these roles. If that
 distinction is unclear, resolve it rather than automatically expanding testing
 origins. Logging in alone does not change the configured origins.
 
-Use `--strict-assets` for extra asset origins when only published dependencies
+Use `--strict-assets` when only published dependencies
 should be fetched: HTML declarations, browser-observed scripts, literal imports,
 worker/script-source references, bundler chunk maps and explicit source maps.
 Heuristic filename strings found in comments, debug messages or examples remain

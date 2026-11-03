@@ -78,7 +78,7 @@ export class Collector {
     if (!this.scope.allows(url, role)) { this.skip(url, 'outside-scope', parent); return null; }
     const records = kind === 'page' ? this.pages : this.assets;
     if (records.has(url)) return records.get(url);
-    if (this.options.strictAssets && role === 'asset' && !this.scope.origins.has(new URL(url).origin) &&
+    if (this.options.strictAssets && role === 'asset' &&
         ['js-string', 'js-literal', 'json-string'].includes(via)) {
       this.skip(url, 'unverified-script-reference', parent); return null;
     }
